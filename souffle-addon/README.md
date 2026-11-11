@@ -20,4 +20,5 @@ Usage:
 and use a Souffle program with the num256functors.dl definitions. For compiled execution, libfunctors.so (i.e., at least a
 link to the real .so) should be in the compilation directory.
 
-A sample Souffle client program can be found under directory dlexample.  
+The retained native clients include `functor_includes.dl` through the common
+client library. Standalone demonstrations and test executables are omitted.

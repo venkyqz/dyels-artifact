@@ -1,7 +1,7 @@
 # Standalone DYELS analysis dependency
 
 This repository contains the native DYELS/Gigahorse analysis engine, its
-signature facts, inherited clients, and source for its Soufflé functors. It has
+signature facts, required inherited clients, and source for its Soufflé functors. It has
 no Gigadall Python package, Remora implementation, TypeScript frontend, model
 client, experiment results, or compiled binaries.
 
@@ -19,8 +19,10 @@ client, experiment results, or compiled binaries.
 The addon is vendored source, with its own license, and is not a nested Git
 submodule. Its inherited `.gitmodules` declaration has been omitted.
 
-`clients/dyels/` contains the artifact clients relocated from the engine root
-client directory, with relative Datalog include paths adjusted. The native
+`clients/dyels/` contains the required artifact storage clients relocated from
+the engine root client directory, with relative Datalog include paths adjusted.
+Unused visualization/evaluation utilities, Docker launchers, orphan Datalog
+programs and standalone functor examples/tests are omitted. The native
 extensions in `clients/gigadall/` come from the extraction-source commit:
 `export.dl`, `storage_facts.dl`, and `storage_prototype.dl`. They expose completed
 native analysis facts and storage reconstruction to Remora. They are retained
@@ -38,8 +40,7 @@ upstream Gigadall license was present at the extraction commit.
 Use Python 3.10 or newer, Soufflé 2.4.1 built with a 64-bit domain, a C/C++
 compiler supporting C++17 and OpenMP, Boost headers, Z3 headers/library, GNU
 Make, and the standard Unix preprocessing/build utilities. The source-only
-engine runner uses Python's standard library. Some optional inherited client
-utilities have their own Python imports.
+engine runner uses Python's standard library.
 
 The Soufflé development headers must be on the C++ include search path. For a
 non-system installation, set `CPLUS_INCLUDE_PATH` to its `include` directory
