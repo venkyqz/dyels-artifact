@@ -1,0 +1,21 @@
+// Persist existing DYELS/clientlib results for the subsequent graph client.
+.output StorageLoad(filename="DYELS_StorageLoad.csv")
+.output StorageStore(filename="DYELS_StorageStore.csv")
+.output StorageStmtKindAndConstruct(filename="DYELS_StorageConstruct.csv")
+.output StorageStmt_HighLevelUses(filename="DYELS_StorageUses.csv")
+.output StorageVariable_Type(filename="DYELS_StorageType.csv")
+.output LocalBlockCanReach(filename="DYELS_BlockReach.csv")
+.output MemoryStatement_ActualArg(filename="DYELS_MemoryArgument.csv")
+.decl DYELS_ConstFlow(source:Variable,target:Variable)
+.output DYELS_ConstFlow
+DYELS_ConstFlow(a,b) :- DataFlowsThroughConstOps(a,b).
+// Native predecessor closure already includes the index itself.
+.decl DYELS_RequiredKey(stmt:Statement,key:Variable)
+.output DYELS_RequiredKey
+DYELS_RequiredKey(s,key) :- StorageStmtToIndexAndConstruct(s,_,$Storage(),index,_),
+ StorageIndexPredecesor(index,part),
+ (part=$MappingAccessIndex(parent,key);part=$ArrayAccessIndex(parent,key);part=$StaticArrayAccessIndex(parent,size,key)),parent=parent.
+.decl DYELS_TypeRecovery(declarations:number,types:number,fields:number)
+.output DYELS_TypeRecovery
+DYELS_TypeRecovery(d,t,f) :- d=count:{StorageDecls(_,_,_,_,_,_)},
+ t=count:{UsedType(_,_)},f=count:{StructFieldTypeInfo(_,_,_,_,_,_,_)}.

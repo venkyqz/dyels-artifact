@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.o
+*.so
+*_tests
+bin/compiled/
+.cache/
+cache/
+.work/
+.datalog_compiled/
+.datalog_compiled_debug/
+results.json
+.temp/
+.scratch/
+souffle-addon/.github/

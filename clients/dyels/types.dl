@@ -1,0 +1,372 @@
+
+.type TypeList = [type: TypeNew, rest: TypeList]
+
+.type TypeNew = ValueType {type: Type} |
+                ArrayType {element: TypeNew} |
+                Struct {elements: TypeList}
+
+
+.decl RevertCastToType(originVar: Variable, checkBlock: Block, type: Type)
+DEBUG_OUTPUT(RevertCastToType)
+
+.decl VarEqualToCastedTo(originVar: Variable, eqRes: Variable, type: Type)
+DEBUG_OUTPUT(VarEqualToCastedTo)
+
+.decl VarNotEqualToCastedTo(originVar: Variable, notEqRes: Variable, type: Type)
+DEBUG_OUTPUT(VarNotEqualToCastedTo)
+
+.decl CastToType(castStmt: Statement, originVar: Variable, castedVar: Variable, type: Type)
+DEBUG_OUTPUT(CastToType)
+
+CastToType(castStmt, originVar, castedVar, cat("uint", to_string(width*8))):-
+  LowBytesMaskOp(originVar, castedVar, width),
+  Statement_Defines(castStmt, castedVar, 0),
+  width != 20,
+  !SignedIntCast(originVar, castedVar, width),
+  !BooleanCast(originVar, castedVar).
+
+CastToType(castStmt, originVar, castedVar, "address"):-
+  LowBytesMaskOp(originVar, castedVar, 20),
+  Statement_Defines(castStmt, castedVar, 0),
+  !SignedIntCast(originVar, castedVar, 20).
+
+CastToType(castStmt, originVar, castedVar, cat("int", to_string(width*8))):-
+  SignedIntCast(originVar, castedVar, width),
+  Statement_Defines(castStmt, castedVar, 0).
+
+CastToType(castStmt, originVar, castedVar, "bool"):-
+  BooleanCast(originVar, castedVar),
+  Statement_Defines(castStmt, castedVar, 0).
+
+CastToType(castStmt, originVar, castedVar, cat("bytes", to_string(width))):-
+  HighBytesMaskOp(originVar, castedVar, width),
+  Statement_Defines(castStmt, castedVar, 0).
+
+CastToType(callStmt, actualArg, actualRet, type):-
+  CallGraphEdge(callBlock, function),
+  Block_Tail(callBlock, callStmt),
+  FormalArgs(function, formalArg, argPos),
+  CastToType(_, formalArg, formalRet, type),
+  FormalReturnArgs(function, formalRet, retPos),
+  ActualArgs(callBlock, actualArg, argPos),
+  ActualReturnArgs(callBlock, actualRet, retPos).
+
+VarEqualToCastedTo(originVar, eqRes, type):-
+  CastToType(_, originVar, castedVar, type),
+  EQ(_, originVar, castedVar, eqRes).
+
+// No-op but produced in unoptimized 0.8 code
+VarEqualToCastedTo(originVar, eqRes, "uint256"):-
+  EQ(_, originVar, originVar, eqRes).
+
+VarNotEqualToCastedTo(originVar, notEqRes, type):-
+  CastToType(_, originVar, castedVar, type),
+  SUB(_, originVar, castedVar, notEqRes).
+
+VarEqualToCastedTo(originVar, eqRes, type):-
+  VarNotEqualToCastedTo(originVar, notEqRes, type),
+  ISZERO(_, notEqRes, eqRes).
+
+VarNotEqualToCastedTo(originVar, notEqRes, type):-
+  VarEqualToCastedTo(originVar, eqRes, type),
+  ISZERO(_, eqRes, notEqRes).
+
+RevertCastToType(originVar, checkBlock, type):-
+  VarNotEqualToCastedTo(originVar, notEqRes, type),
+  JUMPI(jumpi, _, notEqRes),
+  Statement_Block(jumpi, checkBlock),
+  LocalBlockEdge(checkBlock, revertBlock),
+  ThrowBlock(revertBlock),
+  !FallthroughEdge(checkBlock, revertBlock).
+
+RevertCastToType(originVar, checkBlock, type):-
+  VarEqualToCastedTo(originVar, notEqRes, type),
+  JUMPI(jumpi, _, notEqRes),
+  Statement_Block(jumpi, checkBlock),
+  FallthroughEdge(checkBlock, revertBlock),
+  ThrowBlock(revertBlock).
+
+// This rule can be made more precise by ensuring
+RevertCastToType(actual, callerBlock, type):-
+  RevertCastToType(formal, _, type),
+  FormalArgs(function, formal, i),
+  CallGraphEdge(callerBlock, function),
+  ActualArgs(callerBlock, actual, i).
+
+
+.decl HighLevelVariable(var: Variable)
+DEBUG_OUTPUT(HighLevelVariable)
+
+.decl HighLevelVariable_Type(var: Variable, type: Type)
+DEBUG_OUTPUT(HighLevelVariable_Type)
+
+HighLevelVariable(var):-
+  PublicFunctionArg(_, var, _).
+
+HighLevelVariable(var):-
+  FormalArgs(_, var, _).
+
+HighLevelVariable(var):-
+  ExternalCall_ActualReturn(_, var, _).
+
+// TempStmt(tail),
+HighLevelVariable_Type(var, type):-
+  HighLevelVariable(var),
+  RevertCastToType(var, _, type).
+
+HighLevelVariable_Type(var, "uint256"):-
+  HighLevelVariable(var),
+  !RevertCastToType(var, _, _),
+  !CastToType(_, var, _, _),
+  !Array_ElementType(var, _).
+
+// Variable is of a type if every time it's used it's a cast to the same type
+HighLevelVariable_Type(var, type):-
+  HighLevelVariable(var),
+  CastToType(_, var, _, type),
+  uses = count : Statement_Uses(_, var, _),
+  uses1 = count : CastToType(_, var, _, type),
+  uses = uses1.
+
+HighLevelVariable_Type(array, cat(type, "[]")):-
+  HighLevelVariable(array),
+  Array_ElementLength(array, "0x20"),
+  Array_ElementType(array, type).
+
+HighLevelVariable_Type(array, "bytes"):-
+  HighLevelVariable(array),
+  Array_ElementLength(array, "0x1").
+
+HighLevelVariable_Type(struct, cat(cat("struct(", to_string(width)), ")")):-
+  HighLevelVariable(struct),
+  Struct_WordWidth(struct, width).
+
+/**
+  Unused right now.
+*/
+.decl ExtVar_Type(addrVar: Variable, type: Type)
+DEBUG_OUTPUT(ExtVar_Type)
+
+ExtVar_Type(addr, "address"):-
+  CALLER(_, addr);
+  ORIGIN(_, addr);
+  ADDRESS(_, addr).
+
+ExtVar_Type(var, "uint256"):-
+  GAS(_, var);
+  CALLVALUE(_, var);
+  TIMESTAMP(_, var);
+  DIFFICULTY(_, var);
+  NUMBER(_, var);
+  BALANCE(_, _, var).
+
+ExtVar_Type(var, "bytes32"):-
+  BLOCKHASH(_, _, var);
+  EXTCODEHASH(_, _, var).
+
+.decl Var_Type(addrVar: Variable, type: Type)
+DEBUG_OUTPUT(Var_Type)
+
+Var_Type(var, type):-
+  ExtVar_Type(var, type).
+
+Var_Type(var, type):-
+  CastToType(_, _, var, type).
+
+// Can check all uses here
+Var_Type(var, type):-
+  RevertCastToType(var, _, type).
+
+/**
+  Array inferences
+*/
+
+.decl Array_ElementType(array: ArrayVariable, type: Type)
+DEBUG_OUTPUT(Array_ElementType)
+
+Array_ElementType(memArrayTo, type),
+Array_ElementType(array, type):-
+  IsCallDataArrayVar(array),
+  ArrayCopy(loop, array, memArrayTo),
+  StatementInStructuredLoop(load, loop),
+  CALLDATALOAD(load, _, elementVar),
+  RevertCastToType(elementVar, _, type).
+
+Array_ElementType(memArrayTo, type),
+Array_ElementType(array, type):-
+  VarIsArray(_, array),
+  ArrayCopy(loop, array, memArrayTo),
+  StatementInStructuredLoop(load, loop),
+  MLOAD(load, _, elementVar),
+  RevertCastToType(elementVar, _, type).
+
+Array_ElementType(array, type),
+Array_ElementType(memArrayTo, type):-
+  VarIsArray(_, array),
+  ArrayCopy(loop, array, memArrayTo),
+  StatementInStructuredLoop(load, loop),
+  MLOAD(load, _, elementVar),
+  CastToType(_, elementVar, castedVar, type),
+  MSTORE(store, _, castedVar),
+  StatementInStructuredLoop(store, loop).
+
+Array_ElementType(array, "bytes"):-
+  Array_ElementLength(arrayVar, "0x1"),
+  VarIsArray(arrayVar, array).
+
+Array_ElementType(as(array, ArrayVariable), "bytes"):-
+  Array_ElementLength(array, "0x1"),
+  IsCallDataArrayVar(array).
+
+.decl Mapping_IndexType(loc: StorageLocation, mapCons: StorageConstruct, type: Type)
+DEBUG_OUTPUT(Mapping_IndexType)
+
+.decl MappingIndexUsedAs(loc: StorageLocation, mapIndex: StorageIndex, type: Type)
+DEBUG_OUTPUT(MappingIndexUsedAs)
+
+Mapping_IndexType(loc, mapCons, type):-
+  StorageIndex_StorageConstruct(index, mapCons),
+  MappingIndexUsedAs(loc, index, type),
+  uses = count : StorageIndex_StorageConstruct(_, mapCons),
+  uses = count : {StorageIndex_StorageConstruct(someIndex, mapCons), MappingIndexUsedAs(loc, someIndex, type)}.
+
+MappingIndexUsedAs(loc, $MappingAccessIndex(parentIndex, indexVar), type):-
+  ActualStorageIndex(loc, $MappingAccessIndex(parentIndex, indexVar)),
+  CastToType(_, _, indexVar, type).
+
+MappingIndexUsedAs(loc, $MappingAccessIndex(parentIndex, indexVar), type):-
+  ActualStorageIndex(loc, $MappingAccessIndex(parentIndex, indexVar)),
+  RevertCastToType(indexVar, _, type).
+
+.decl VarHasType(ctx: clientCtx.ClientContext, var: Variable, type: Type)
+DEBUG_OUTPUT(VarHasType)
+
+VarHasType(ctx, var, type):-
+  clientCtx.ReachableClientContext(ctx, fun),
+  Variable_Function(var, fun),
+  Var_Type(var, type).
+
+VarHasType(newCtx, formal, type):-
+  clientCtx.MergeClientContext(callerCtx, caller, newCtx),
+  VarHasType(callerCtx, actual, type),
+  ActualArgs(caller, actual, pos),
+  CallGraphEdge(caller, function),
+  FormalArgs(function, formal, pos).
+
+VarHasType(callerCtx, actual, type):-
+  clientCtx.MergeClientContext(callerCtx, caller, calleeCtx),
+  CallGraphEdge(caller, function),
+  FormalReturnArgs(function, formal, index),
+  VarHasType(calleeCtx, formal, type),
+  ActualReturnArgs(caller, actual, index).
+
+.decl ArrayHasElementType(heapCtx: clientCtx.ClientContext, arrayId: ArrayVariable, type: Type)
+DEBUG_OUTPUT(ArrayHasElementType)
+
+ArrayHasElementType(heapCtx, arrayId, type):-
+  VarPointsToArray(_, arrayVar, heapCtx, arrayId),
+  VarIsArray(arrayVar, array),
+  Array_ElementType(array, type).
+
+// HELPERS FOR STORAGE MODELING
+
+Mapping_KeyType(loc, cons, type):-
+  Mapping_PossibleKeyType(loc, cons, type).
+
+.decl Mapping_PossibleKeyType(loc: StorageLocation, cons: StorageConstruct, type: symbol) choice-domain(cons)
+DEBUG_OUTPUT(Mapping_PossibleKeyType)
+
+Mapping_PossibleKeyType($Storage(), $Mapping(parCons), type):-
+  StorageIndex_StorageConstruct($MappingAccessIndex(_ , keyVar), $Mapping(parCons)),
+  Var_Type(keyVar, type).
+
+
+/**
+  Storage Variable Declarations as output in the "storage" field of the storage-layout json
+*/
+.decl StorageDecls(astId: number, contract: symbol, label: symbol, offset: number, slot: symbol, type: symbol)
+.output StorageDecls(IO=jsonfile, format=object)
+
+StorageDecls(1234, "decompiled.sol", MERGED_STORAGE_VAR(val, startByte, endByte), startByte, @hex_to_decimal_str(val), cat("t_", type)):-
+  StorageVariable_Type($Storage(), $TightlyPackedVariable($Constant(val), startByte, endByte), type).
+
+StorageDecls(1234, "decompiled.sol", SIMPLE_STORAGE_VAR(val), 0, @hex_to_decimal_str(val), cat("t_", type)):-
+  ProcessedStorageVariable($Storage(), $Variable($Constant(val)), $Variable($Constant(val))),
+  StorageVariable_Type($Storage(), $Variable($Constant(val)), type).
+
+StorageDecls(1234, "decompiled.sol", cat("array", val), 0, @hex_to_decimal_str(val), cat("t_", type)):-
+  DataStructure_Type($Storage(), $Array($Constant(val)), type).
+
+StorageDecls(1234, "decompiled.sol", cat("mapping", val), 0, @hex_to_decimal_str(val), cat("t_", type)):-
+  DataStructure_Type($Storage(), $Mapping($Constant(val)), type).
+
+StorageDecls(1234, "decompiled.sol", cat("array", val), 0, @hex_to_decimal_str(val), cat("t_", type)):-
+  DataStructure_Type($Storage(), $StaticArray($Constant(val), arraySize), type), arraySize=arraySize.
+
+
+.type TypeInfo = [kind: symbol, encoding: symbol, label: symbol, numberOfBytes: symbol, base: symbol, key: symbol, value: symbol]
+.decl UsedType(typeId: symbol, typeInfo: TypeInfo)
+.output UsedType(IO=jsonfile, format=object)
+
+UsedType(cat("t_", type), ["value", "inplace", type, to_string(width), "None", "None", "None"]):-
+  (StorageVariableType(_, type); StorageVariable_Type(_, _, type); DataStructure_Type(_, _, type); Mapping_KeyType(_, _, type)),
+  Type_Width(type, width).
+
+UsedType("t_uint256", ["value", "inplace", "uint256", "32", "None", "None", "None"]).
+
+UsedType(cat("t_", structId), ["struct", "inplace", structId, to_string(32*elemNum), "None", "None", "None"]):-
+  DataStructureValueIsStruct($Storage(), _, structId, elemNum).
+
+UsedType(cat("t_", type), ["mapping", "mapping", type, "32", "None", cat("t_", keyType), cat("t_", valueType)]):-
+  DataStructure_Type($Storage(), $Mapping(parCons), type),
+  Mapping_KeyType($Storage(), $Mapping(parCons), keyType),
+  DataStructure_ValueOrElementType($Storage(), $Mapping(parCons), valueType).
+
+UsedType(cat("t_", type), ["mapping", "mapping", type, "32", "None", "t_uint256", cat("t_", valueType)]):-
+  DataStructure_Type($Storage(), $Mapping(parCons), type),
+  !Mapping_KeyType($Storage(), $Mapping(parCons), _),
+  DataStructure_ValueOrElementType($Storage(), $Mapping(parCons), valueType).
+
+UsedType(cat("t_", type), ["dynamic_array", "dynamic_array", type, "32", cat("t_", valueType), "None", "None"]):-
+  DataStructure_Type($Storage(), $Array(parCons), type),
+  DataStructure_ValueOrElementType($Storage(), $Array(parCons), valueType),
+  !BytesOrStringLengthV2($Storage(), $Array(parCons), _).
+
+UsedType("t_string", ["bytes", "bytes", "string", "32", "None", "None", "None"]):-
+  BytesOrStringLengthV2($Storage(), _, _).
+
+UsedType(cat("t_", type), ["static_array", "inplace", type, to_string(arraySize*32), cat("t_", valueType), "None", "None"]):-
+  DataStructure_Type($Storage(), $StaticArray(parCons, arraySize), type),
+  DataStructure_ValueOrElementType($Storage(), $StaticArray(parCons, arraySize), valueType),
+  !IsPackedArray($Storage(), $StaticArray(parCons, arraySize), _).
+
+UsedType(cat("t_", type), ["static_array", "inplace", type, to_string(((arraySize*baseWidth + 31) / 32)* 32), cat("t_", valueType), "None", "None"]):-
+  DataStructure_Type($Storage(), $StaticArray(parCons, arraySize), type),
+  DataStructure_ValueOrElementType($Storage(), $StaticArray(parCons, arraySize), valueType),
+  IsPackedArray($Storage(), $StaticArray(parCons, arraySize), baseWidth).
+
+/**
+  Information to recover the members field of a struct type declaration
+*/
+.decl StructFieldTypeInfo(structId: symbol, astId: number, contract: symbol, label: symbol, offset: number, slot: symbol, type: symbol)
+.output StructFieldTypeInfo(IO=jsonfile, format=object)
+StructFieldTypeInfo(cat("t_", structId), 1234, "decompiled.sol",
+                              SIMPLE_FIELD(offset), 0, to_string(offset), cat("t_", type)):-
+  DataStructureValueIsStruct($Storage(), cons, structId, _),
+  StorageConstruct_ParentAndOffset(childCons, cons, offset),
+  ProcessedStorageVariable($Storage(), childCons, childCons),
+  StorageVariable_Type($Storage(), childCons, type).
+
+StructFieldTypeInfo(cat("t_", structId), 1234, "decompiled.sol",
+                              PACKED_FIELD(offset, startByte, endByte), startByte, to_string(offset), cat("t_", type)):-
+  DataStructureValueIsStruct($Storage(), cons, structId, _),
+  StorageConstruct_ParentAndOffset($Variable(varCons), cons, offset),
+  ProcessedStorageVariable($Storage(), $Variable(varCons), $TightlyPackedVariable(varCons, startByte, endByte)),
+  StorageVariable_Type($Storage(), $TightlyPackedVariable(varCons, startByte, endByte), type).
+
+
+StructFieldTypeInfo(cat("t_", structId), 1234, "decompiled.sol",
+                              SIMPLE_FIELD(offset), 0, to_string(offset), cat("t_", type)):-
+  DataStructureValueIsStruct($Storage(), cons, structId, _),
+  StorageConstruct_ParentAndOffset(childCons, cons, offset),
+  DataStructure_Type($Storage(), childCons, type).

@@ -1,0 +1,224 @@
+// GigaDall export client (plan §9).
+//
+// Materializes a curated, documented relation set (GD_*) over the finished
+// Gigahorse decompilation. This client performs NO new analysis of its own:
+// it includes the existing libraries and projects their output into stable,
+// renderer/query-friendly relations consumed by the GigaDall fact store.
+//
+// Design notes:
+//  * Storage constructs are exported verbatim (ADT columns render as
+//    `$Constant(0x1)`, `$Mapping([...])`, ... in the CSV output); the Python
+//    exporter normalizes them into canonical storage ids.
+//  * Only relations listed in gigadall/gigahorse/catalog.py may be output
+//    here — the catalog is the single source of truth (plan §9.2).
+
+// Base TAC schema + reconstructed decompiler relations
+#include "../../clientlib/decompiler_imports.dl"
+
+// Data-flow / control-dependence machinery (DependsOn, DataFlows, Controls, ...)
+#include "../../clientlib/flows.dl"
+
+// Memory + storage modeling (StorageVariableInfo, StorageLoad/Store, types)
+#include "../../clientlib/guards.dl"
+
+// dyels artifact type inference (clients/dyels/types.dl): Mapping_KeyType
+// producers + inter-procedural VarHasType — needs memory modeling first
+#include "../../clientlib/memory_modeling/memory_modeling.dl"
+#include "../dyels/types.dl"
+
+/**
+ * Functions and selectors
+ */
+.decl GD_Function(function_id: symbol, selector: symbol, name: symbol, public: symbol)
+.output GD_Function
+
+GD_Function(f, sel, name, "1") :-
+  PublicFunctionId(f, sel, name).
+
+GD_Function(f, "", "", "0") :-
+  IsFunction(f),
+  !IsPublicFunction(f).
+
+/**
+ * Formal arguments of functions, by position
+ */
+.decl GD_FormalArg(function_id: symbol, arg_index: number, variable_id: symbol)
+.output GD_FormalArg
+
+GD_FormalArg(f, pos, v) :-
+  FormalArgs(f, v, pos).
+
+/**
+ * CFG blocks belonging to a function
+ */
+.decl GD_FunctionBlock(function_id: symbol, block_id: symbol)
+.output GD_FunctionBlock
+
+GD_FunctionBlock(f, b) :-
+  InFunction(b, f).
+
+/**
+ * Statements with owning function, block, opcode
+ */
+.decl GD_Statement(statement_id: symbol, function_id: symbol, block_id: symbol, opcode: symbol)
+.output GD_Statement
+
+GD_Statement(s, f, b, op) :-
+  Statement_Function(s, f),
+  Statement_Block(s, b),
+  Statement_Opcode(s, op).
+
+/**
+ * Original (non-TAC) statement text, for provenance
+ */
+.decl GD_StatementOriginal(statement_id: symbol, original_statement: symbol)
+.output GD_StatementOriginal
+
+GD_StatementOriginal(s, os) :-
+  Statement_OriginalStatement(s, os).
+
+/**
+ * Original statement list text (rendered list ADT) for a statement id
+ */
+.decl GD_StatementOriginalList(statement_id: symbol, original_statement_list: OriginalStatementList)
+.output GD_StatementOriginalList
+
+GD_StatementOriginalList(s, osl) :-
+  Statement_OriginalStatementList(s, osl).
+
+/**
+ * Variable uses by statement, by operand index
+ */
+.decl GD_Use(statement_id: symbol, variable_id: symbol, operand_index: number)
+.output GD_Use
+
+GD_Use(s, v, i) :-
+  Statement_Uses(s, v, i).
+
+/**
+ * Variable defs by statement, by def index
+ */
+.decl GD_Def(statement_id: symbol, variable_id: symbol, def_index: number)
+.output GD_Def
+
+GD_Def(s, v, n) :-
+  Statement_Defines(s, v, n).
+
+/**
+ * Constant values assigned to variables (masks like 0xff...ff, small ints,
+ * selectors) — key type evidence the agent cannot guess from opcodes alone
+ */
+.decl GD_VariableValue(variable_id: symbol, value: symbol)
+.output GD_VariableValue
+
+GD_VariableValue(v, val) :-
+  Variable_Value(v, val).
+
+/**
+ * Direct data dependence between variables
+ */
+.decl GD_DependsOn(from_var: symbol, to_var: symbol)
+.output GD_DependsOn
+
+GD_DependsOn(x, y) :-
+  DependsOn(x, y).
+
+/**
+ * Transitive data flow between variables
+ */
+.decl GD_DataFlows(from_var: symbol, to_var: symbol)
+.output GD_DataFlows
+
+GD_DataFlows(x, y) :-
+  DataFlows(x, y).
+
+/**
+ * Control dependence: condition statement controls block, with condition var
+ */
+.decl GD_Controls(condition_statement: symbol, controlled_block: symbol, condition_var: symbol)
+.output GD_Controls
+
+GD_Controls(x, y, v) :-
+  ControlsWith(x, y, v).
+
+/**
+ * Top-level storage variables with root slot and packed byte range.
+ * storageVariable is the merged/simple var symbol; storageSlot is the root
+ * slot constant; byteLow/byteHigh bound the packed range (0..31 when whole).
+ */
+.decl GD_StorageVariable(storage_id: symbol, root_slot: symbol, byte_low: number, byte_high: number)
+.output GD_StorageVariable
+
+GD_StorageVariable(sv, slot, lo, hi) :-
+  StorageVariableInfo(sv, $Storage(), slot, lo, hi).
+
+/**
+ * Recovered storage types (verbatim construct; exporter normalizes to
+ * canonical storage ids by parsing the rendered ADT)
+ */
+.decl GDR_StorageType(storage_construct: StorageConstruct, type: symbol)
+.output GDR_StorageType
+
+GDR_StorageType(cons, t) :-
+  StorageVariable_Type($Storage(), cons, t).
+
+/**
+ * Storage loads (construct keyed; joined to slots by the exporter)
+ */
+.decl GDR_StorageLoad(storage_construct: StorageConstruct, statement_id: symbol, variable_id: symbol)
+.output GDR_StorageLoad
+
+GDR_StorageLoad(cons, s, v) :-
+  StorageLoad(s, cons, v).
+
+/**
+ * Storage stores (write side rendered as VariableWrite/ConstantWrite ADT)
+ */
+.decl GDR_StorageStore(storage_construct: StorageConstruct, statement_id: symbol, variable_or_constant: VarOrConstWrite)
+.output GDR_StorageStore
+
+GDR_StorageStore(cons, s, w) :-
+  StorageStore(s, cons, w).
+
+/**
+ * Mapping key types
+ */
+.decl GDR_MappingKeyType(storage_construct: StorageConstruct, type: symbol)
+.output GDR_MappingKeyType
+
+GDR_MappingKeyType(cons, t) :-
+  Mapping_KeyType($Storage(), cons, t).
+
+/**
+ * Value (mapping) / element (array) types
+ */
+.decl GDR_ElementType(storage_construct: StorageConstruct, type: symbol)
+.output GDR_ElementType
+
+GDR_ElementType(cons, t) :-
+  DataStructure_ValueOrElementType($Storage(), cons, t).
+
+/**
+ * Struct-valued storage
+ */
+.decl GDR_Struct(storage_construct: StorageConstruct, struct_id: symbol, definition: symbol)
+.output GDR_Struct
+
+GDR_Struct(cons, sid, def) :-
+  DataStructureValueIsStruct($Storage(), cons, sid, _),
+  StructToString(sid, def).
+
+/**
+ * Composed storage types from the storage-modeling (dyels) layer:
+ * full type strings incl. mappings (uint256 key default when key type is
+ * unknown), arrays, strings, and packed struct layouts, keyed by the
+ * verbatim storage construct (root slot is its innermost $Constant).
+ */
+.decl GDR_DataStructureType(storage_construct: StorageConstruct, type: symbol)
+.output GDR_DataStructureType
+
+GDR_DataStructureType(cons, t) :-
+  DataStructure_Type($Storage(), cons, t).
+
+
+#include "storage_facts.dl"

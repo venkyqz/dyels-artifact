@@ -1,0 +1,103 @@
+#include "../dyels/storage_eval.dl"
+
+ArrayCopy(loop,fromArray,toArray) :-
+    MemoryCopyLoop(loop,fromStart,toStart),
+    ArrayDataStartVar(fromVariable,fromStart), VarIsArray(fromVariable,fromArray),
+    Array_ElementLength(fromVariable,"0x1"),
+    RawDataArrayVar_ClassRep(toStart,toArray),
+    InductionVariableDecreasesByConst(loop,[length,remaining],32),
+    InductionVariableLowerBoundVar(loop,[length,remaining],bound),
+    Variable_Value(bound,"0x20"), ArrayLengthVar(fromVariable,length).
+
+Mapping_PossibleKeyType($Storage(),$Mapping(parent),"bytes") :-
+    StorageIndex_StorageConstruct($MappingAccessIndex(_,key),$Mapping(parent)),
+    Array_ElementLength(key,"0x1").
+
+UsedType("t_bytes",["bytes","bytes","bytes","32","None","None","None"]) :-
+    Mapping_KeyType($Storage(),_,"bytes").
+
+Variable_StorageIndex(def,$StaticArrayAccessIndex(parent,bound,index)) :-
+    Variable_StorageIndex(base,parent), ADDFix(_,base,scaled,def),
+    VarTimesConstantNoIdentity(index,_,scaled), RevertEnforcesEnum(index,bound,_).
+
+Variable_StorageIndex(def,$OffsetIndex($StaticArrayAccessIndex(parent,size,index),@hex_to_number(const))) :-
+    Variable_StorageIndex(base,$StaticArrayAccessIndex(parent,size,index)),
+    ADDFix(_,base,offset,def), Variable_Value(offset,const),
+    "0x1"=@lt_256(const,"0xffff").
+
+.output StorageStmtKindAndConstruct(filename="DYELS_StorageConstruct.csv")
+.output StorageLoad(filename="DYELS_StorageLoad.csv")
+.output StorageStore(filename="DYELS_StorageStore.csv")
+.output StorageStmt_HighLevelUses(filename="DYELS_StorageUses.csv")
+.output StorageDecls(filename="StorageDecls.csv")
+.output StructFieldTypeInfo(filename="StructFieldTypeInfo.csv")
+
+.decl SP_Type(id:symbol,kind:symbol,encoding:symbol,label:symbol,width:symbol,base:symbol,key:symbol,value:symbol)
+.output SP_Type
+SP_Type(id,kind,encoding,label,width,base,key,value) :-
+    UsedType(id,[kind,encoding,label,width,base,key,value]).
+
+// These observations retain the native construct identity and chosen results.
+.decl SP_StructValue(location:StorageLocation, construct:StorageConstruct, structId:symbol, elements:number)
+.output SP_StructValue
+SP_StructValue(l,c,s,n) :- DataStructureValueIsStruct(l,c,s,n).
+
+.decl SP_Parent(child:StorageConstruct, parent:StorageConstruct, offset:number)
+.output SP_Parent
+SP_Parent(c,p,o) :- StorageConstruct_ParentAndOffset(c,p,o).
+
+.decl SP_ElementType(location:StorageLocation, construct:StorageConstruct, type:symbol)
+.output SP_ElementType
+SP_ElementType(l,c,t) :- DataStructure_ValueOrElementType(l,c,t).
+
+.decl SP_KeyType(location:StorageLocation, construct:StorageConstruct, type:symbol)
+.output SP_KeyType
+SP_KeyType(l,c,t) :- Mapping_KeyType(l,c,t).
+
+.decl SP_ScalarType(location:StorageLocation, construct:StorageConstruct, type:symbol)
+.output SP_ScalarType
+SP_ScalarType(l,c,t) :- StorageVariable_Type(l,c,t).
+
+// IntermType has already undergone subsumption. This is not pre-choice provenance.
+.decl SP_TypeOrigin(location:StorageLocation, construct:StorageConstruct, type:symbol, origin:symbol)
+.output SP_TypeOrigin
+SP_TypeOrigin(l,$Variable(c),"uint256","surviving_any32") :-
+    StorageVariable_IntermTypeDone(_),
+    StorageVariable_IntermType(l,$Variable(c),"any32"),
+    !IsPackedArray(l,c,_).
+SP_TypeOrigin(l,$Mapping(p),"uint256","default_mapping_key") :-
+    DataStructure_Type(l,$Mapping(p),_), !Mapping_KeyType(l,$Mapping(p),_).
+SP_TypeOrigin(l,$Array(p),"string","bytes_or_string") :-
+    BytesOrStringLengthV2(l,$Array(p),_).
+SP_TypeOrigin(l,$Variable(c),t,"packed_array_uint") :-
+    StorageVariable_IntermTypeDone(_),
+    StorageVariable_IntermType(l,$Variable(c),_),
+    IsPackedArray(l,c,w), t=cat("uint",to_string(8*w)).
+
+// Alias propagation is a native interpretation, not declaration-type proof.
+.decl SP_Use(location:StorageLocation, construct:StorageConstruct, variable:Variable, statement:Statement, opcode:Opcode, operand:number)
+.output SP_Use
+SP_Use(l,c,v,s,op,i) :-
+    StorageVariableToAlias(l,c,v), Statement_Uses(s,v,i), Statement_Opcode(s,op),
+    (op="SLT";op="SGT";op="SDIV";op="SMOD";op="SIGNEXTEND";
+     op="LT";op="GT";op="DIV";op="MOD";op="AND";op="BYTE";
+     op="CALL";op="CALLCODE";op="STATICCALL";op="DELEGATECALL";
+     op="BALANCE";op="EXTCODESIZE";op="EXTCODEHASH";op="SELFDESTRUCT").
+
+// Native array copies and full-word reaching writes remain advisory may evidence.
+.decl SP_ArrayStoreSource(location:StorageLocation, construct:StorageConstruct, store:Statement, storedValue:Variable, arrayLoad:Statement, elementValue:Variable, array:ArrayVariable, index:Variable, copySite:StatementOrLoop, sourceArray:ArrayVariable, function:Function, argPosition:number, forwardWrite:symbol)
+.output SP_ArrayStoreSource
+SP_ArrayStoreSource($Storage(),c,s,v,load,v,a,i,copy,source,f,pos,"direct") :-
+    StorageStore(s,c,$VariableWrite(v)), SSTORE(s,_,v),
+    ArrayLoadAtIndex(load,a,i,v), ArrayCopy(copy,source,a),
+    PublicFunctionArrayArg(f,source,pos),
+    Statement_Function(s,f), Statement_Function(load,f).
+
+SP_ArrayStoreSource($Storage(),c,s,v,load,element,a,i,copy,source,f,pos,write) :-
+    StorageStore(s,c,$VariableWrite(v)), SSTORE(s,_,v), MLOAD(forward,_,v),
+    ArrayLoadAtIndex(load,a,i,element), ArrayCopy(copy,source,a),
+    PublicFunctionArrayArg(f,source,pos),
+    MSTOREToMemConsStmt_WrittenVar(write,forward,0,element),
+    MemWriteToMemConsStmtResolved(write,forward,0,0,32),
+    Statement_Function(s,f), Statement_Function(load,f),
+    Statement_Function(forward,f), Statement_Function(write,f).
