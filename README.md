@@ -1,4 +1,4 @@
-# Standalone DYELS engine for Remora
+# ICSE'26 DYELS Artifact
 
 This source dependency provides the Gigahorse bytecode lifter, DYELS storage
 analysis, native export adapters, signature facts and Soufflé functors used by
